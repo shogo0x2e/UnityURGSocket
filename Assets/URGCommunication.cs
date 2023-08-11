@@ -12,13 +12,12 @@ public class URGCommunication : MonoBehaviour
     private const string ipAddr = "192.168.0.10";
     private const    int port = 10940;
 
-    private const string urgMdCmd = "MD0000108001000";
+    private const string urgMdCmd = "MD0000108001000\n";
 
     private    Thread clientThread;
     private TcpClient tcpClient = new TcpClient();
 
-    private List<long> distances = new List<long>();
-    private Action<List<long>> onReadMD;
+    public List<long> Distances { get; private set; } = new List<long>();
 
     private void Start()
     {
@@ -26,16 +25,45 @@ public class URGCommunication : MonoBehaviour
         {
             tcpClient.Connect(ipAddr, port);
 
+            Debug.Log("TCP connection has Started");
+               
+            // ListenForClients()
             clientThread = new Thread(new ThreadStart(ClientCommHandler));
             clientThread.Start();
 
             helperWriteBytes(tcpClient.GetStream(), urgMdCmd);
+
+
+            Debug.Log("Threading has Started");
         }
         catch (Exception e)
         {
             Debug.LogException(e);
             Application.Quit();
         }
+    }
+
+    private void OnApplicationQuit()
+    {
+        if (tcpClient != null)
+        {
+            if (tcpClient.Connected)
+            {
+                NetworkStream stream = tcpClient.GetStream();
+                if (stream != null)
+                {
+                    stream.Close();
+                }
+            }
+            tcpClient.Close();
+        }
+
+        if (clientThread != null)
+        {
+            clientThread.Abort();
+        }
+
+        Debug.Log("Done");
     }
 
     public void ClientCommHandler()
@@ -46,8 +74,12 @@ public class URGCommunication : MonoBehaviour
             {
                 using (NetworkStream stream = tcpClient.GetStream())
                 {
+
+                    int md = 0, other = 0;
+
                     while (true)
                     {
+
                         long timeStamp = 0;
                         string receiveData = helperReadLine(stream);
 
@@ -56,13 +88,11 @@ public class URGCommunication : MonoBehaviour
                             new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries
                         );
 
-                        int md = 0, other = 0;
-
                         if (splitRecvData[0].Substring(0, 2) == "MD")
                         {
                             md++;
 
-                            distances.Clear();
+                            Distances.Clear();
 
                             if (splitRecvData[1].StartsWith("00"))
                             {
@@ -72,16 +102,23 @@ public class URGCommunication : MonoBehaviour
                             {
                                 // タイムスタンプを取得する
                                 // ::: CHECK ::: 4 って何の数？？
-                                timeStamp = 0;
-                                for (int i = 0; i < 4; i++)
+                                timeStamp = helperDecode(splitRecvData[2], 4);
+
+                                //
+                                // Action つかって CallBack してた、元のコード
+                                //
+
+                                // distance_data(split_command, 3, ref distances);
+                                StringBuilder sb = new StringBuilder();
+                                for (int i = 3; i < splitRecvData.Length; i++)
                                 {
-                                    timeStamp <<= 6;
-                                    timeStamp |= (long)splitRecvData[2][i] - 0x30;
+                                    sb.Append(splitRecvData[i].Substring(0, splitRecvData[i].Length - 1));
                                 }
 
-                                if (onReadMD != null)
+                                // return SCIP_Reader.decode_array(sb.ToString(), 3, ref distances);
+                                for (int pos = 0; pos <= sb.ToString().Length - 3; pos += 3)
                                 {
-                                    onReadMD.Invoke(distances);
+                                    Distances.Add(helperDecode(sb.ToString(), 3, pos));
                                 }
                             }
                             else
@@ -96,7 +133,7 @@ public class URGCommunication : MonoBehaviour
                             Debug.LogWarningFormat(splitRecvData[0].Substring(0, 2));
                         }
 
-                        Debug.Log("MD: " + md + " / OTHER: " + other);
+                        Debug.Log("MD: " + md + " / OTHER: " + other + " / LEN: " + Distances.Count);
                     }
                 }
             }
@@ -105,6 +142,19 @@ public class URGCommunication : MonoBehaviour
         {
             Debug.LogException(e);
         }
+    }
+
+    private static long helperDecode(string data, int size, int offset = 0)
+    {
+        long value = 0;
+
+        for (int i = 0; i < size; ++i)
+        {
+            value <<= 6;
+            value |= (long)data[offset + i] - 0x30;
+        }
+
+        return value;
     }
 
     private static string helperReadLine(NetworkStream stream)
